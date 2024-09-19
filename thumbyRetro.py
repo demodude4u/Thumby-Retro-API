@@ -49,71 +49,115 @@ class Color:
     VIOLET = const(0x915C)
 
 class Bitmap:
-    @micropython.native
-    def __init__(self, filepath, key=-1):
+    def __init__(self, filepath, key=-1, columns=1, rows=1):
         self.tex = TextureResource(filepath, False)
         self.width = self.tex.width
         self.height = self.tex.height
         self.data = self.tex.data
         self.key = key
-
-class Tileset:
-    @micropython.native
-    def __init__(self, filepath, columns, rows, key=-1):
-        self.tex = TextureResource(filepath, False)
-        self.width = self.tex.width
-        self.height = self.tex.height
-        self.data = self.tex.data
         self.columns = columns
         self.rows = rows
-        self.key = key
-
         self.tileWidth = self.width // self.columns
         self.tileHeight = self.height // self.rows
 
 class Sprite:
-    pass
+    def __init__(self, bitmap, x=0, y=0, frame=0, mirrorX=0, mirrorY=0):
+        self.bitmap = bitmap
+        self.x = x
+        self.y = y
+        self.frame = frame
+        self.mirrorX = mirrorX
+        self.mirrorY = mirrorY
 
 class BitmapLayer:
-    def __init__(self):
-        self.bitmap = None
-        self.x = 0
-        self.y = 0
+    def __init__(self, bitmap=None, x=0, y=0, frame=0):
+        self.bitmap = bitmap
+        self.x = x
+        self.y = y
+        self.frame = frame
+        
+    @micropython.viper
+    def render(buf:ptr16, offset:int, x:int, y:int, w:int):
+        pass
 
 class TileLayer:
-    def __init__(self, columns, rows):
+    def __init__(self, columns, rows, bitmap=None, tilemap=None, x=0, y=0):
         self.columns = columns
         self.rows = rows
-        self.data = bytearray(columns * rows)
-
-        self.tileset = None
+        self.bitmap = bitmap
+        if tilemap is None:
+            self.tilemap = bytearray(columns * rows)
+        else:
+            self.tilemap = tilemap
         self.x = 0
         self.y = 0
+        
+    @micropython.viper
+    def render(buf:ptr16, offset:int, x:int, y:int, w:int):
+        pass
 
 class SpriteLayer:
     def __init__(self):
         self.sprites = []
+        
+    @micropython.viper
+    def render(buf:ptr16, offset:int, x:int, y:int, w:int):
+        pass
+        
 
-class ScanLine:
-    def __init__(self):
-        self.pixels = array.array("H",[Color.BLACK for _ in range(WIDTH)])
-        self.commands = []
+# class ScanLine:
+#     def __init__(self):
+#         self.pixels = array.array("H",[Color.BLACK for _ in range(WIDTH)])
+#         self.commands = []
 
 class PPU:
+    buf = engine_io.back_fb_data()
+    
     layers = []
-    scanLines = [ScanLine() for _ in range(HEIGHT)]
+    # scanLines = [ScanLine() for _ in range(HEIGHT)]
+    scanStarted = False
+    cx, cy = 0, 0
 
-    def StartLine():
-        pass
+    @micropython.native
+    def ScanLine(y:int):
+        cy = PPU.cy
+        offset = cy * WIDTH
+        buf = PPU.buf
+        while cy < y:
+            for layer in PPU.layers:
+                layer.render(buf, offset, 0, cy, WIDTH)
+            cy += 1
+            offset += WIDTH
+        PPU.cy = cy
 
-    def JumpLine(y:int):
-        pass
+    @micropython.native
+    def ScanX(x:int):
+        cx = PPU.cx
+        cy = PPU.cy
+        buf = PPU.buf
+        offset = cy * WIDTH + cx
+        w = x - cx
+        for layer in PPU.layers:
+            layer.render(buf, offset, cx, cy, w)
+        PPU.cx = cx + w
+    
+    @micropython.native
+    def ScanXEnd():
+        cx = PPU.cx
+        cy = PPU.cy
+        buf = PPU.buf
+        offset = cy * WIDTH + cx
+        w = WIDTH - cx
+        if w > 0:
+            for layer in PPU.layers:
+                layer.render(buf, offset, cx, cy, w)
+        PPU.cx = 0
+        PPU.cy += 1
 
-    def JumpLinePixel(x:int):
-        pass
-
-    def NextLine(count:int=1):
-        pass
-
+    @micropython.native
     def Update():
-        pass
+        while not engine.tick():
+            pass
+        
+    def setFPS(fps):
+        engine.fps_limit(fps)
