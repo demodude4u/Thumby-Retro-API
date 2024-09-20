@@ -81,7 +81,34 @@ class BitmapLayer:
         
     @micropython.viper
     def render(self, buf:ptr16, offset:int, x:int, y:int, w:int):
-        pass
+        bitmap = self.bitmap
+        bmp = ptr16(bitmap.data)
+        srcW = int(bitmap.tileWidth)
+        srcH = int(bitmap.tileHeight)
+        cols = int(bitmap.columns)
+        bmpW = int(bitmap.width)
+        key = int(bitmap.key) 
+        frame = int(self.frame)
+
+        srcY = ((((y-int(self.y)) % srcH) + srcH) % srcH)
+        if frame > 0:
+            row = frame // cols
+            col = frame % cols
+            srcX = col * srcW
+            srcY += row * srcH
+        else:
+            srcX = 0
+        si1 = srcY * bmpW + srcX
+        si = si1 + ((((x-int(self.x)) % srcW) + srcW) % srcW)
+        di = offset
+        for _ in range(w):
+            if (si-si1) == srcW:
+                si = si1
+            c = bmp[si] & 0xFFFF
+            if c != key:
+                buf[di] = c
+            si += 1
+            di += 1
 
 class TileLayer:
     def __init__(self, columns, rows, bitmap=None, tilemap=None, x=0, y=0):
@@ -97,7 +124,7 @@ class TileLayer:
         
     @micropython.viper
     def render(self, buf:ptr16, offset:int, x:int, y:int, w:int):
-        pass
+        pass # TODO
 
 _SL_CACHE_COUNT = const(0)
 _SL_CACHE_YSTOP = const(1)
@@ -120,22 +147,22 @@ class SpriteLayer:
     @micropython.viper
     def render(self, buf:ptr16, offset:int, x:int, y:int, w:int):
         cache = ptr8(self._cache)
-        sprites = ptr(self.sprites)
+        sprites = self.sprites
         if cache[_SL_CACHE_YSTOP] < y or cache[_SL_CACHE_XSTOP] < x:
             minY2 = HEIGHT-1
             nextY1 = HEIGHT-1
             ci = 3 + cache[_SL_CACHE_COUNT]
-            for i in range(int(len(self.sprites))):
+            for i in range(int(len(sprites))):
                 sprite = sprites[i]
                 x1 = int(sprite.x)
                 y1 = int(sprite.y)
-                x2 = sprX1 + int(sprite.width)
-                y2 = sprY1 + int(sprite.height)
+                x2 = x1 + int(sprite.width)
+                y2 = y1 + int(sprite.height)
                 if y1 > y:
-                    nextY1 = min(nextY1, y1)
+                    nextY1 = int(min(nextY1, y1))
                 if x1 > (x+w) or x2 <= x or y1 > y or y2 <= y:
                     continue
-                minY2 = min(minY2, y2)
+                minY2 = int(min(minY2, y2))
                 cache[ci] = i
                 ci += 1
             count = ci - 3
@@ -151,10 +178,11 @@ class SpriteLayer:
 
         buf = ptr16(PPU.buf)
         for ci in range(3,count+3):
-            sprite = cache[ci]
+            sprite = sprites[cache[ci]]
             sprW = int(sprite.width)
             sprH = int(sprite.height)
             bitmap = sprite.bitmap
+            cols = int(bitmap.columns)
             bmpW = int(bitmap.width)
             bmp = ptr16(bitmap.data)
             key = int(bitmap.key) 
@@ -162,7 +190,6 @@ class SpriteLayer:
 
             srcY = y - int(sprite.y)
             if frame > 0:
-                cols = bmpW // sprW
                 row = frame // cols
                 col = frame % cols
                 srcX = col * sprW
@@ -171,22 +198,24 @@ class SpriteLayer:
                 srcX = 0
 
             dstX = int(sprite.x)
-            w = sprW
             
-            if dstX < 0:
-                srcX -= dstX
-                w += dstX
-                dstX = 0
-            if (dstX+w) >= WIDTH:
-                w -= (dstX+w) - WIDTH
+            if dstX < x:
+                d = (x-dstX)
+                srcX += d
+                sprW -= d
+                dstX = x
+            dx2 = dstX + w
+            x2 = x + w
+            if dx2 >= x2:
+                sprW -= dx2 - x2
 
             si = srcY * bmpW + srcX
             di = y * WIDTH + dstX
-            for _ in range(w):
+            for _ in range(sprW):
                 c = bmp[si] & 0xFFFF
                 if c != key:
                     buf[di] = c
-                si += dx
+                si += 1
                 di += 1
 
         
@@ -197,7 +226,7 @@ class SpriteLayer:
 #         self.commands = []
 
 class PPU:
-    buf = engine_io.back_fb_data()
+    buf = engine_draw.back_fb_data()
     
     layers = []
     # scanLines = [ScanLine() for _ in range(HEIGHT)]
@@ -205,7 +234,7 @@ class PPU:
     cx, cy = 0, 0
 
     @micropython.native
-    def ScanLine(y:int):
+    def scanLine(y:int):
         cy = PPU.cy
         offset = cy * WIDTH
         buf = PPU.buf
@@ -217,7 +246,7 @@ class PPU:
         PPU.cy = cy
 
     @micropython.native
-    def ScanX(x:int):
+    def scanX(x:int):
         cx = PPU.cx
         cy = PPU.cy
         buf = PPU.buf
@@ -228,7 +257,7 @@ class PPU:
         PPU.cx = cx + w
     
     @micropython.native
-    def ScanXEnd():
+    def scanXEnd():
         cx = PPU.cx
         cy = PPU.cy
         buf = PPU.buf
@@ -241,7 +270,17 @@ class PPU:
         PPU.cy += 1
 
     @micropython.native
-    def Update():
+    def update():
+        cy = PPU.cy
+        offset = cy * WIDTH
+        buf = PPU.buf
+        while cy < HEIGHT:
+            for layer in PPU.layers:
+                layer.render(buf, offset, 0, cy, WIDTH)
+            cy += 1
+            offset += WIDTH
+        PPU.cx = 0
+        PPU.cy = 0
         while not engine.tick():
             pass
         
