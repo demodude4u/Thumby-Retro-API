@@ -78,6 +78,10 @@ class BitmapLayer:
         self.x = x
         self.y = y
         self.frame = frame
+
+    @micropython.viper
+    def start(self):
+        pass
         
     @micropython.viper
     def render(self, buf:ptr16, offset:int, x:int, y:int, w:int):
@@ -123,61 +127,72 @@ class TileLayer:
         self.y = 0
         
     @micropython.viper
+    def start(self):
+        pass # TODO
+
+    @micropython.viper
     def render(self, buf:ptr16, offset:int, x:int, y:int, w:int):
         pass # TODO
 
 _SL_CACHE_COUNT = const(0)
 _SL_CACHE_YSTOP = const(1)
-_SL_CACHE_XSTOP = const(2)
 _SL_CACHE_MINSIZE = const(16)
 
 class SpriteLayer:
     def __init__(self):
         self.sprites = []
 
-        self._cache = bytearray(3 + _SL_CACHE_MINSIZE)
-        self._cacheCount = 0
-        self._cacheYStop = -1
+        self._cache = bytearray(_SL_CACHE_MINSIZE)
+        self._cacheMeta = array.array("h",[0,-1])
         
     @micropython.viper
     def invalidate(self):
-        cache = ptr8(self._cache)
-        cache[_SL_CACHE_YSTOP] = -1
+        cacheMeta = ptr16(self._cacheMeta)
+        cacheMeta[_SL_CACHE_YSTOP] = -1
+
+    @micropython.viper
+    def start(self):
+        cacheMeta = ptr16(self._cacheMeta)
+        cacheMeta[_SL_CACHE_YSTOP] = -1
 
     @micropython.viper
     def render(self, buf:ptr16, offset:int, x:int, y:int, w:int):
         cache = ptr8(self._cache)
+        cacheMeta = self._cacheMeta
+        cacheMetaWrite = ptr16(self._cacheMeta)
+        
         sprites = self.sprites
-        if cache[_SL_CACHE_YSTOP] < y or cache[_SL_CACHE_XSTOP] < x:
+        # print(x,y,w,"-- CHECK",cacheMeta[_SL_CACHE_COUNT],cacheMeta[_SL_CACHE_YSTOP])
+        if y > int(cacheMeta[_SL_CACHE_YSTOP]):
+            # print("???",y,int(cacheMeta[_SL_CACHE_YSTOP]))
             minY2 = HEIGHT-1
             nextY1 = HEIGHT-1
-            ci = 3 + cache[_SL_CACHE_COUNT]
+            ci = 0
             for i in range(int(len(sprites))):
                 sprite = sprites[i]
-                x1 = int(sprite.x)
                 y1 = int(sprite.y)
-                x2 = x1 + int(sprite.width)
                 y2 = y1 + int(sprite.height)
-                if y1 > y:
+                if y < y1:
                     nextY1 = int(min(nextY1, y1))
-                if x1 > (x+w) or x2 <= x or y1 > y or y2 <= y:
-                    continue
+                    if y >= y2:
+                        # print("-----",y,"-",i,y1,y2,"SKIP")
+                        continue
                 minY2 = int(min(minY2, y2))
                 cache[ci] = i
                 ci += 1
-            count = ci - 3
-            cache[_SL_CACHE_COUNT] = count
+                # print("-----",y,"-",i,y1,y2,"ADD")
+            count = ci
+            cacheMetaWrite[_SL_CACHE_COUNT] = count
             if count > 0:
-                cache[_SL_CACHE_YSTOP] = minY2 - 1
-                cache[_SL_CACHE_XSTOP] = x + w - 1
+                cacheMetaWrite[_SL_CACHE_YSTOP] = minY2 - 1
             else:
-                cache[_SL_CACHE_YSTOP] = nextY1 - 1
-                cache[_SL_CACHE_XSTOP] = WIDTH
+                cacheMetaWrite[_SL_CACHE_YSTOP] = nextY1 - 1
+            # print(x,y,w,"-- CACHE",cacheMeta[_SL_CACHE_COUNT],cacheMeta[_SL_CACHE_YSTOP])
         else:
-            count = cache[_SL_CACHE_COUNT]
+            count = int(cacheMeta[_SL_CACHE_COUNT])
 
         buf = ptr16(PPU.buf)
-        for ci in range(3,count+3):
+        for ci in range(count):
             sprite = sprites[cache[ci]]
             sprW = int(sprite.width)
             sprH = int(sprite.height)
@@ -204,10 +219,12 @@ class SpriteLayer:
                 srcX += d
                 sprW -= d
                 dstX = x
-            dx2 = dstX + w
+            dx2 = dstX + sprW
             x2 = x + w
             if dx2 >= x2:
                 sprW -= dx2 - x2
+
+            # print(x, y, w, "|", srcX, srcY, sprW, "|", dstX)
 
             si = srcY * bmpW + srcX
             di = y * WIDTH + dstX
@@ -234,11 +251,16 @@ class PPU:
     cx, cy = 0, 0
 
     @micropython.native
+    def scanStart():
+        for layer in PPU.layers:
+            layer.start()
+
+    @micropython.native
     def scanLine(y:int):
         cy = PPU.cy
         offset = cy * WIDTH
         buf = PPU.buf
-        while cy < y:
+        while cy <= y:
             for layer in PPU.layers:
                 layer.render(buf, offset, 0, cy, WIDTH)
             cy += 1
